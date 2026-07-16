@@ -15,4 +15,14 @@ public class EngineClient(HttpClient http)
             ?? throw new InvalidOperationException("Engine returned an empty response");
         return new ValidationResult(result.Approved, result.Fee, result.Reason);
     }
+
+    private record AccrueResponse(decimal Interest);
+
+    public async Task<decimal> AccrueAsync(string accountType, decimal balance)
+    {
+        var response = await http.PostAsJsonAsync("/accrue", new { accountType, balance });
+        var result = await response.Content.ReadFromJsonAsync<AccrueResponse>()
+            ?? throw new InvalidOperationException("Engine returned an empty response");
+        return result.Interest;
+    }
 }

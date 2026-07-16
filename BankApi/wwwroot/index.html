@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Meridian Bank</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏦</text></svg>" />
+<title>Open Bank</title>
+<link rel="icon" href="/logo.png" />
 <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8/dist/browser/signalr.min.js"></script>
 <style>
   :root {
@@ -43,13 +43,9 @@
     box-shadow: var(--shadow);
   }
 
-  .brand {
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: 1.35rem;
-    letter-spacing: 0.02em;
-  }
+  .brand { display: flex; align-items: center; }
 
-  .brand .icon { margin-right: 0.4rem; }
+  .brand-logo { height: 24px; width: auto; display: block; background: #fff; padding: 4px 8px; border-radius: 6px; }
 
   #userBar { display: flex; align-items: center; gap: 0.9rem; font-size: 0.9rem; }
   #userBar .welcome { opacity: 0.85; }
@@ -185,10 +181,22 @@
   }
   .flash { animation: flash-green 1.4s ease-out; }
 
-  .account-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+  .account-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
 
   .inline-form { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
   .inline-form input { flex: 1; }
+
+  .muted { color: var(--muted); font-size: 0.85rem; }
+
+  .history { margin-top: 0.8rem; max-height: 220px; overflow-y: auto; }
+
+  .history-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .history-table th, .history-table td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .history-table th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; }
+
+  .admin-scroll { max-height: 320px; overflow: auto; }
+
+  .new-account-row { display: flex; gap: 0.5rem; }
 
   .card {
     background: var(--card);
@@ -216,9 +224,10 @@
 <body>
 
 <div class="topbar">
-  <div class="brand"><span class="icon">🏦</span>Meridian Bank</div>
+  <div class="brand"><img src="/logo.png" alt="Open Bank" class="brand-logo" /></div>
   <div id="userBar" class="hidden">
     <span class="welcome" id="welcomeUser"></span>
+    <button class="ghost small hidden" id="adminNavBtn" onclick="showAdminPanel()">Admin</button>
     <button class="ghost small" onclick="logout()">Log out</button>
   </div>
 </div>
@@ -256,7 +265,13 @@
   <div id="dashboard" class="hidden">
     <div class="dashboard-header">
       <h2>Your Accounts</h2>
-      <button class="ghost small" onclick="openAccount()">+ Open new account</button>
+      <div class="new-account-row">
+        <select id="newAccountType">
+          <option value="checking">Checking</option>
+          <option value="savings">Savings</option>
+        </select>
+        <button class="ghost small" onclick="openAccount()">+ Open new account</button>
+      </div>
     </div>
     <div id="accounts" class="accounts-grid"></div>
 
@@ -278,6 +293,30 @@
         <button class="primary" onclick="transfer()">Send</button>
       </div>
       <p id="transferError" class="error"></p>
+    </div>
+  </div>
+
+  <div id="adminPanel" class="hidden">
+    <div class="dashboard-header">
+      <h2>Admin</h2>
+      <div class="new-account-row">
+        <button class="ghost small" onclick="accrueInterest()">Accrue Interest</button>
+        <button class="ghost small" onclick="showDashboard()">Back to Dashboard</button>
+      </div>
+    </div>
+    <p id="accrueResult" class="muted"></p>
+
+    <div class="card">
+      <h3>Users</h3>
+      <div id="adminUsers" class="admin-scroll"></div>
+    </div>
+    <div class="card">
+      <h3>All Accounts</h3>
+      <div id="adminAccounts" class="admin-scroll"></div>
+    </div>
+    <div class="card">
+      <h3>All Transactions (latest 200)</h3>
+      <div id="adminTransactions" class="admin-scroll"></div>
     </div>
   </div>
 </main>
@@ -338,11 +377,21 @@ function logout() {
   document.getElementById('userBar').classList.add('hidden');
 }
 
+function decodeJwtRole(t) {
+  try {
+    const payload = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.role;
+  } catch {
+    return null;
+  }
+}
+
 async function enterDashboard(username) {
   document.getElementById('authScreen').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
   document.getElementById('userBar').classList.remove('hidden');
   if (username) document.getElementById('welcomeUser').textContent = `Signed in as ${username}`;
+  document.getElementById('adminNavBtn').classList.toggle('hidden', decodeJwtRole(token) !== 'admin');
   await refreshAccounts();
   await connectHub();
 }
@@ -371,11 +420,14 @@ function renderAccounts() {
       <div class="account-actions">
         <button class="ghost small" onclick="toggleForm(${acct.accountId}, 'deposit')">Deposit</button>
         <button class="ghost small" onclick="toggleForm(${acct.accountId}, 'withdraw')">Withdraw</button>
+        <button class="ghost small" onclick="toggleHistory(${acct.accountId})">History</button>
+        <button class="ghost small" onclick="downloadStatement(${acct.accountId})">Statement</button>
       </div>
       <div class="inline-form hidden" id="form-${acct.accountId}">
         <input id="amt-${acct.accountId}" placeholder="Amount" />
         <button class="primary small" id="formAction-${acct.accountId}">Confirm</button>
       </div>
+      <div class="history hidden" id="history-${acct.accountId}"></div>
       <p id="error-${acct.accountId}" class="error"></p>
     `;
     container.appendChild(card);
@@ -434,10 +486,113 @@ async function transfer() {
 }
 
 async function openAccount() {
-  const acct = await api('/api/accounts', 'POST', { accountType: 'checking' });
+  const acct = await api('/api/accounts', 'POST', { accountType: field('newAccountType') });
   accounts.push(acct);
   renderAccounts();
   if (connection) await connection.invoke('SubscribeToAccount', acct.accountId);
+}
+
+async function toggleHistory(accountId) {
+  const el = document.getElementById(`history-${accountId}`);
+  if (!el.classList.contains('hidden')) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.innerHTML = '<p class="muted">Loading...</p>';
+  try {
+    const txns = await api(`/api/accounts/${accountId}/transactions`, 'GET');
+    if (!txns.length) {
+      el.innerHTML = '<p class="muted">No transactions yet.</p>';
+      return;
+    }
+    const rows = txns.map(t => `
+      <tr>
+        <td>${new Date(t.createdAt).toLocaleString()}</td>
+        <td>${t.transactionType}</td>
+        <td>$${t.amount.toFixed(2)}</td>
+        <td>$${t.fee.toFixed(2)}</td>
+      </tr>`).join('');
+    el.innerHTML = `<table class="history-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Fee</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (err) {
+    el.innerHTML = `<p class="error">${err.message}</p>`;
+  }
+}
+
+async function downloadStatement(accountId) {
+  // A plain <a href> download link can't attach the Authorization header this
+  // API requires, so fetch the CSV ourselves and trigger the download from a blob.
+  const res = await fetch(`/api/accounts/${accountId}/statement`, {
+    headers: { Authorization: 'Bearer ' + token },
+  });
+  if (!res.ok) {
+    alert('Could not download statement');
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `statement-account-${accountId}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function showDashboard() {
+  document.getElementById('adminPanel').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+}
+
+async function showAdminPanel() {
+  document.getElementById('dashboard').classList.add('hidden');
+  document.getElementById('adminPanel').classList.remove('hidden');
+  document.getElementById('accrueResult').textContent = '';
+  await loadAdminData();
+}
+
+const MONEY_COLUMNS = new Set(['balance', 'amount', 'fee']);
+const DATE_COLUMNS = new Set(['createdAt']);
+
+function formatCell(column, value) {
+  if (MONEY_COLUMNS.has(column)) return `$${value.toFixed(2)}`;
+  if (DATE_COLUMNS.has(column)) return new Date(value).toLocaleString();
+  return value;
+}
+
+function renderAdminTable(containerId, columns, rows) {
+  const container = document.getElementById(containerId);
+  if (!rows.length) {
+    container.innerHTML = '<p class="muted">None.</p>';
+    return;
+  }
+  const header = columns.map(c => `<th>${c}</th>`).join('');
+  const body = rows.map(r => `<tr>${columns.map(c => `<td>${formatCell(c, r[c])}</td>`).join('')}</tr>`).join('');
+  container.innerHTML = `<table class="history-table"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadAdminData() {
+  const [users, accts, txns] = await Promise.all([
+    api('/api/admin/users', 'GET'),
+    api('/api/admin/accounts', 'GET'),
+    api('/api/admin/transactions', 'GET'),
+  ]);
+  renderAdminTable('adminUsers', ['userId', 'username', 'email', 'role', 'createdAt'], users);
+  renderAdminTable('adminAccounts', ['accountId', 'userId', 'username', 'accountType', 'balance'], accts);
+  renderAdminTable('adminTransactions', ['transactionId', 'accountId', 'transactionType', 'amount', 'fee', 'createdAt'], txns);
+}
+
+async function accrueInterest() {
+  const resultEl = document.getElementById('accrueResult');
+  resultEl.textContent = 'Processing...';
+  try {
+    const result = await api('/api/admin/accrue-interest', 'POST');
+    resultEl.textContent = `Applied interest to ${result.accountsProcessed} account(s).`;
+    await loadAdminData();
+  } catch (err) {
+    resultEl.textContent = err.message;
+  }
 }
 
 function flashBalance(accountId, balance) {

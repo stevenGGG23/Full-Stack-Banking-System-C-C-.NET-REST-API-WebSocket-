@@ -23,6 +23,10 @@ var jwtKey = new SymmetricSecurityKey(Convert.FromBase64String(jwtSection["Key"]
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Without this, the JWT bearer handler remaps short claim names (like our
+        // "role" claim) to long ClaimTypes.* URIs on inbound validation, silently
+        // breaking any RequireClaim("role", ...) check against the literal name.
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -58,6 +62,14 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapHub<AccountHub>("/hubs/accounts").RequireAuthorization();
+
+static async Task<bool> OwnsAccount(NpgsqlConnection conn, int accountId, int callerId)
+{
+    await using var check = new NpgsqlCommand("SELECT 1 FROM accounts WHERE account_id = @id AND user_id = @userId", conn);
+    check.Parameters.AddWithValue("id", accountId);
+    check.Parameters.AddWithValue("userId", callerId);
+    return await check.ExecuteScalarAsync() is not null;
+}
 
 // GET /api/health - simple health check ("/" now serves the frontend, see wwwroot/index.html)
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", message = "Bank API is running" }));
@@ -98,7 +110,7 @@ app.MapPost("/api/auth/register", async (RegisterRequest req, NpgsqlDataSource d
 
     await tx.CommitAsync();
 
-    var token = tokens.GenerateToken(userId, req.Username);
+    var token = tokens.GenerateToken(userId, req.Username, "user");
     return Results.Ok(new { token, accountId });
 });
 
@@ -107,7 +119,7 @@ app.MapPost("/api/auth/login", async (LoginRequest req, NpgsqlDataSource db, Tok
 {
     await using var conn = await db.OpenConnectionAsync();
     await using var select = new NpgsqlCommand(
-        "SELECT user_id, password_hash FROM users WHERE username = @username", conn);
+        "SELECT user_id, password_hash, role FROM users WHERE username = @username", conn);
     select.Parameters.AddWithValue("username", req.Username);
 
     await using var reader = await select.ExecuteReaderAsync();
@@ -116,12 +128,13 @@ app.MapPost("/api/auth/login", async (LoginRequest req, NpgsqlDataSource db, Tok
 
     var userId = reader.GetInt32(0);
     var passwordHash = reader.GetString(1);
+    var role = reader.GetString(2);
     await reader.CloseAsync();
 
     if (!BCrypt.Net.BCrypt.Verify(req.Password, passwordHash))
         return Results.Unauthorized();
 
-    var token = tokens.GenerateToken(userId, req.Username);
+    var token = tokens.GenerateToken(userId, req.Username, role);
     return Results.Ok(new { token });
 });
 
@@ -178,6 +191,54 @@ app.MapGet("/api/accounts/{id}", async (int id, NpgsqlDataSource db, ClaimsPrinc
 
     var account = new Account(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetDecimal(3));
     return Results.Ok(account);
+}).RequireAuthorization();
+
+// GET /api/accounts/{id}/transactions - transaction history, only if owned by the caller
+app.MapGet("/api/accounts/{id}/transactions", async (int id, NpgsqlDataSource db, ClaimsPrincipal user) =>
+{
+    var callerId = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    await using var conn = await db.OpenConnectionAsync();
+    if (!await OwnsAccount(conn, id, callerId))
+        return Results.NotFound();
+
+    await using var select = new NpgsqlCommand(
+        "SELECT transaction_id, transaction_type, amount, fee, created_at FROM transactions WHERE account_id = @id ORDER BY created_at DESC LIMIT 100", conn);
+    select.Parameters.AddWithValue("id", id);
+
+    var results = new List<TransactionRecord>();
+    await using var reader = await select.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        results.Add(new TransactionRecord(reader.GetInt32(0), reader.GetString(1), reader.GetDecimal(2), reader.GetDecimal(3), reader.GetDateTime(4)));
+
+    return Results.Ok(results);
+}).RequireAuthorization();
+
+// GET /api/accounts/{id}/statement?from=&to= - CSV export, only if owned by the caller
+app.MapGet("/api/accounts/{id}/statement", async (int id, DateTime? from, DateTime? to, NpgsqlDataSource db, ClaimsPrincipal user) =>
+{
+    var callerId = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    await using var conn = await db.OpenConnectionAsync();
+    if (!await OwnsAccount(conn, id, callerId))
+        return Results.NotFound();
+
+    var fromDate = from ?? DateTime.MinValue;
+    var toDate = to ?? DateTime.MaxValue;
+
+    await using var select = new NpgsqlCommand(
+        "SELECT transaction_id, transaction_type, amount, fee, created_at FROM transactions WHERE account_id = @id AND created_at BETWEEN @from AND @to ORDER BY created_at", conn);
+    select.Parameters.AddWithValue("id", id);
+    select.Parameters.AddWithValue("from", fromDate);
+    select.Parameters.AddWithValue("to", toDate);
+
+    var csv = new System.Text.StringBuilder();
+    csv.AppendLine("TransactionId,Date,Type,Amount,Fee");
+    await using var reader = await select.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        csv.AppendLine($"{reader.GetInt32(0)},{reader.GetDateTime(4):yyyy-MM-dd HH:mm:ss},{reader.GetString(1)},{reader.GetDecimal(2)},{reader.GetDecimal(3)}");
+
+    return Results.Text(csv.ToString(), "text/csv");
 }).RequireAuthorization();
 
 // POST /api/transactions/deposit - body: { "accountId": 2, "amount": 100.00 }
@@ -387,6 +448,94 @@ app.MapPost("/api/transactions/transfer", async (TransferRequest req, EngineClie
     return Results.Ok(new { message = "Transfer successful", fee = validation.Fee });
 }).RequireAuthorization();
 
+// GET /api/admin/users - admin only
+app.MapGet("/api/admin/users", async (NpgsqlDataSource db) =>
+{
+    await using var conn = await db.OpenConnectionAsync();
+    await using var select = new NpgsqlCommand(
+        "SELECT user_id, username, email, role, created_at FROM users ORDER BY user_id", conn);
+
+    var results = new List<AdminUserRecord>();
+    await using var reader = await select.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        results.Add(new AdminUserRecord(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetDateTime(4)));
+
+    return Results.Ok(results);
+}).RequireAuthorization(p => p.RequireClaim("role", "admin"));
+
+// GET /api/admin/accounts - admin only, all accounts across all users
+app.MapGet("/api/admin/accounts", async (NpgsqlDataSource db) =>
+{
+    await using var conn = await db.OpenConnectionAsync();
+    await using var select = new NpgsqlCommand(
+        "SELECT a.account_id, a.user_id, u.username, a.account_type, a.balance FROM accounts a JOIN users u ON u.user_id = a.user_id ORDER BY a.account_id", conn);
+
+    var results = new List<AdminAccountRecord>();
+    await using var reader = await select.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        results.Add(new AdminAccountRecord(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetString(3), reader.GetDecimal(4)));
+
+    return Results.Ok(results);
+}).RequireAuthorization(p => p.RequireClaim("role", "admin"));
+
+// GET /api/admin/transactions - admin only, latest 200 system-wide
+app.MapGet("/api/admin/transactions", async (NpgsqlDataSource db) =>
+{
+    await using var conn = await db.OpenConnectionAsync();
+    await using var select = new NpgsqlCommand(
+        "SELECT transaction_id, account_id, transaction_type, amount, fee, created_at FROM transactions ORDER BY created_at DESC LIMIT 200", conn);
+
+    var results = new List<AdminTransactionRecord>();
+    await using var reader = await select.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        results.Add(new AdminTransactionRecord(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetDecimal(3), reader.GetDecimal(4), reader.GetDateTime(5)));
+
+    return Results.Ok(results);
+}).RequireAuthorization(p => p.RequireClaim("role", "admin"));
+
+// POST /api/admin/accrue-interest - admin only, applies interest to every eligible account
+app.MapPost("/api/admin/accrue-interest", async (NpgsqlDataSource db, EngineClient engine, IHubContext<AccountHub> hub) =>
+{
+    await using var conn = await db.OpenConnectionAsync();
+
+    var accounts = new List<(int Id, string Type, decimal Balance)>();
+    await using (var select = new NpgsqlCommand("SELECT account_id, account_type, balance FROM accounts", conn))
+    await using (var reader = await select.ExecuteReaderAsync())
+    {
+        while (await reader.ReadAsync())
+            accounts.Add((reader.GetInt32(0), reader.GetString(1), reader.GetDecimal(2)));
+    }
+
+    var applied = new List<InterestApplied>();
+    await using var tx = await conn.BeginTransactionAsync();
+    foreach (var acct in accounts)
+    {
+        var interest = await engine.AccrueAsync(acct.Type, acct.Balance);
+        if (interest <= 0)
+            continue;
+
+        await using var update = new NpgsqlCommand(
+            "UPDATE accounts SET balance = balance + @interest WHERE account_id = @id RETURNING balance", conn, tx);
+        update.Parameters.AddWithValue("interest", interest);
+        update.Parameters.AddWithValue("id", acct.Id);
+        var newBalance = (decimal)(await update.ExecuteScalarAsync())!;
+
+        await using var insert = new NpgsqlCommand(
+            "INSERT INTO transactions (account_id, transaction_type, amount, fee) VALUES (@id, 'interest', @amt, 0)", conn, tx);
+        insert.Parameters.AddWithValue("id", acct.Id);
+        insert.Parameters.AddWithValue("amt", interest);
+        await insert.ExecuteNonQueryAsync();
+
+        applied.Add(new InterestApplied(acct.Id, interest, newBalance));
+    }
+    await tx.CommitAsync();
+
+    foreach (var a in applied)
+        await hub.Clients.Group($"account-{a.AccountId}").SendAsync("BalanceUpdated", new { accountId = a.AccountId, balance = a.NewBalance });
+
+    return Results.Ok(new { accountsProcessed = applied.Count, applied });
+}).RequireAuthorization(p => p.RequireClaim("role", "admin"));
+
 app.Run();
 
 // Type declarations go AFTER all top-level statements in C#
@@ -398,3 +547,8 @@ record TransferRequest(int FromAccountId, int ToAccountId, decimal Amount);
 record RegisterRequest(string Username, string Email, string Password);
 record LoginRequest(string Username, string Password);
 record CreateAccountRequest(string AccountType);
+record TransactionRecord(int TransactionId, string TransactionType, decimal Amount, decimal Fee, DateTime CreatedAt);
+record AdminUserRecord(int UserId, string Username, string Email, string Role, DateTime CreatedAt);
+record AdminAccountRecord(int AccountId, int UserId, string Username, string AccountType, decimal Balance);
+record AdminTransactionRecord(int TransactionId, int AccountId, string TransactionType, decimal Amount, decimal Fee, DateTime CreatedAt);
+record InterestApplied(int AccountId, decimal Interest, decimal NewBalance);

@@ -35,6 +35,13 @@ ValidationResult Validate(const std::string& transactionType, double amount, dou
     return {true, fee, ""};
 }
 
+double Accrue(const std::string& accountType, double balance) {
+    if (accountType == "savings") {
+        return balance * 0.005;
+    }
+    return 0.0;
+}
+
 }  // namespace
 
 int main() {
@@ -70,6 +77,26 @@ int main() {
         res.set_content(
             json{{"approved", result.approved}, {"fee", result.fee}, {"reason", result.reason}}.dump(),
             "application/json");
+    });
+
+    svr.Post("/accrue", [](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (const json::parse_error&) {
+            res.status = 400;
+            res.set_content(json{{"interest", 0}}.dump(), "application/json");
+            return;
+        }
+
+        if (!body.contains("accountType") || !body.contains("balance")) {
+            res.status = 400;
+            res.set_content(json{{"interest", 0}}.dump(), "application/json");
+            return;
+        }
+
+        double interest = Accrue(body["accountType"].get<std::string>(), body["balance"].get<double>());
+        res.set_content(json{{"interest", interest}}.dump(), "application/json");
     });
 
     std::cout << "Engine listening on 0.0.0.0:8081" << std::endl;

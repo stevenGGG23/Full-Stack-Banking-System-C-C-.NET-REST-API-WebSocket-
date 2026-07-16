@@ -7,7 +7,7 @@ namespace BankApi.Services;
 
 public class TokenService(IConfiguration config)
 {
-    public string GenerateToken(int userId, string username)
+    public string GenerateToken(int userId, string username, string role)
     {
         var jwt = config.GetSection("Jwt");
         var key = new SymmetricSecurityKey(Convert.FromBase64String(jwt["Key"]!));
@@ -17,6 +17,7 @@ public class TokenService(IConfiguration config)
         {
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(ClaimTypes.Name, username),
+            new Claim("role", role),
         };
 
         var token = new JwtSecurityToken(

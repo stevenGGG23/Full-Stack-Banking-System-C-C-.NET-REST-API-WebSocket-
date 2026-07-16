@@ -6,6 +6,20 @@ validates every transaction and computes fees; PostgreSQL is the system of
 record; and a SignalR hub pushes live, per-account balance updates to a
 small browser frontend. Services communicate over REST.
 
+## Demo
+
+<!--
+Drop screenshots into docs/screenshots/ and they'll render below - e.g.:
+  docs/screenshots/login.png
+  docs/screenshots/dashboard.png
+  docs/screenshots/admin.png
+-->
+
+| | |
+|---|---|
+| ![Login](docs/screenshots/login.png) | ![Dashboard](docs/screenshots/dashboard.png) |
+| ![Admin panel](docs/screenshots/admin.png) | |
+
 ## Architecture
 
 ```
@@ -46,6 +60,11 @@ small browser frontend. Services communicate over REST.
   amount, fee, and timestamp; balances are never edited outside a transaction
 - Live, per-account balance updates pushed over an authenticated SignalR hub
   (clients only ever hear about accounts they've proven they own), no polling
+- Per-account transaction history and CSV statement export
+- Manual, admin-triggered interest accrual on savings accounts
+- An admin/audit view over all users, accounts, and transactions system-wide,
+  gated by a `role` claim on the JWT (not just a frontend nicety — every admin
+  endpoint re-checks the claim server-side)
 - A minimal browser dashboard to exercise the whole flow end to end
 
 ## Project Structure
@@ -88,6 +107,8 @@ Core minimal APIs, so routes live directly in `Program.cs`.
 | POST | `/api/accounts` | `{accountType}` → opens a new account owned by the caller |
 | GET | `/api/accounts` | Lists only the caller's own accounts |
 | GET | `/api/accounts/{id}` | One account — `404` if it doesn't exist or isn't the caller's |
+| GET | `/api/accounts/{id}/transactions` | Last 100 ledger rows for the account, newest first — same ownership check |
+| GET | `/api/accounts/{id}/statement?from=&to=` | CSV export of the account's ledger in a date range (defaults to all-time) — same ownership check |
 
 ### Transactions *(require `Authorization: Bearer <token>`)*
 
@@ -96,6 +117,20 @@ Core minimal APIs, so routes live directly in `Program.cs`.
 | POST | `/api/transactions/deposit` | `{accountId, amount}` |
 | POST | `/api/transactions/withdraw` | `{accountId, amount}` — engine-validated; 1% fee on amounts over $500 |
 | POST | `/api/transactions/transfer` | `{fromAccountId, toAccountId, amount}` — engine-validated; flat $1 fee; the recipient account doesn't need to belong to the caller |
+
+### Admin *(require `Authorization: Bearer <token>` with a `role: admin` claim — `403` otherwise)*
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/admin/users` | Every user: id, username, email, role, created_at |
+| GET | `/api/admin/accounts` | Every account system-wide, joined with the owner's username |
+| GET | `/api/admin/transactions` | Latest 200 transactions system-wide, newest first |
+| POST | `/api/admin/accrue-interest` | Applies interest to every eligible account (see Engine below) in one transaction, then broadcasts `BalanceUpdated` per affected account. Manual/on-demand by design — not a scheduled job. |
+
+There's no self-service way to become admin (that would be a privilege-escalation
+hole in the register endpoint) — the first admin is created by directly
+flipping the `role` column in the database after a normal registration; see
+Getting Started.
 
 ### Real-time
 
@@ -109,6 +144,7 @@ Core minimal APIs, so routes live directly in `Program.cs`.
 |---|---|---|
 | GET | `/health` | Liveness check |
 | POST | `/validate` | `{transactionType, amount, currentBalance}` → `{approved, fee, reason}` |
+| POST | `/accrue` | `{accountType, balance}` → `{interest}` — 0.5% of balance for `savings`, 0 otherwise |
 
 ### Misc
 
@@ -121,10 +157,12 @@ Core minimal APIs, so routes live directly in `Program.cs`.
 
 Three core tables (`database/schema.sql`):
 
-- **users** — username/email/bcrypt password hash
+- **users** — username/email/bcrypt password hash/`role` (`user` or `admin`,
+  defaults to `user`)
 - **accounts** — one or more per user; holds current balance and account type
 - **transactions** — append-only ledger; every balance change is recorded
-  with type, amount, fee, and timestamp
+  with type, amount, fee, and timestamp (`interest` is a valid type alongside
+  `deposit`/`withdrawal`/`transfer_in`/`transfer_out`)
 
 Balances are never edited directly outside a validated, committed transaction.
 
@@ -172,9 +210,20 @@ cd engine && cmake -B build && cmake --build build && ./build/engine
 cd BankApi && dotnet run
 ```
 
-6. Open `http://localhost:5082` (via the Codespaces **Ports** tab if remote)
-   — register a user and use the dashboard. Registration auto-opens a
-   `checking` account so there's something to deposit into immediately.
+6. Open `http://localhost:5082` (via the Codespaces **Ports** tab if remote,
+   or VS Code's "Simple Browser: Show" command pointed at that URL) — register
+   a user and use the dashboard. Registration auto-opens a `checking` account
+   so there's something to deposit into immediately.
+
+7. (Optional) To use the admin view, promote a user to admin directly in the
+   database — there's no API for this on purpose:
+
+```bash
+sudo su - postgres -c "psql -d bank -c \"UPDATE users SET role='admin' WHERE username='<your username>';\""
+```
+
+   Log out and back in afterward — the `role` claim is baked into the JWT at
+   login, so an already-issued token won't pick up the change.
 
 ## Design Notes
 
@@ -204,6 +253,16 @@ cd BankApi && dotnet run
 - **cpp-httplib over raw sockets or Boost.Beast.** Both apt-installable
   (`libcpp-httplib-dev`, `nlohmann-json3-dev`), letting the engine's code
   focus on the fee/limit logic instead of hand-rolling HTTP parsing.
+- **Interest accrual is manual, not a scheduled job.** An admin hits one
+  endpoint that computes and applies interest immediately — easier to demo
+  and test than waiting on a timer, with the same underlying mechanics either
+  way if it's later moved to a real schedule.
+- **`MapInboundClaims = false` on the JWT bearer handler.** Without it, ASP.NET
+  Core silently remaps short claim names (like this app's `role` claim) to
+  long `ClaimTypes.*` URIs on inbound validation — a real bug hit during
+  development where `RequireClaim("role", "admin")` never matched even though
+  the token plainly contained `role: admin`, because by the time authorization
+  ran, the claim's type had been rewritten out from under it.
 
 ## Tech Stack
 

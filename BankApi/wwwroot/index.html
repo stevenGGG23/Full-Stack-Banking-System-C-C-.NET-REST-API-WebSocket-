@@ -2,62 +2,285 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Bank</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meridian Bank</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏦</text></svg>" />
 <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8/dist/browser/signalr.min.js"></script>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.4rem; }
-  .card { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
-  .row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
-  input, select, button { padding: 0.4rem; font-size: 1rem; }
-  input { flex: 1; }
-  button { cursor: pointer; }
-  .error { color: #b00020; }
-  .balance { font-size: 1.6rem; font-weight: bold; }
-  .hidden { display: none; }
-  #dashboard .account-header { display: flex; justify-content: space-between; align-items: baseline; }
-  small { color: #666; }
+  :root {
+    --navy: #0b2545;
+    --navy-dark: #071a33;
+    --teal: #1b998b;
+    --teal-dark: #157c70;
+    --bg: #f2f5f8;
+    --card: #ffffff;
+    --border: #e1e7ed;
+    --text: #1c2b3a;
+    --muted: #6b7c8c;
+    --red: #c0392b;
+    --green: #1b998b;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(15, 35, 60, 0.08), 0 1px 2px rgba(15, 35, 60, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    min-height: 100vh;
+  }
+
+  .topbar {
+    background: var(--navy);
+    color: #fff;
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--shadow);
+  }
+
+  .brand {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 1.35rem;
+    letter-spacing: 0.02em;
+  }
+
+  .brand .icon { margin-right: 0.4rem; }
+
+  #userBar { display: flex; align-items: center; gap: 0.9rem; font-size: 0.9rem; }
+  #userBar .welcome { opacity: 0.85; }
+
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1rem 4rem;
+  }
+
+  .hidden { display: none !important; }
+
+  /* ---- Auth screen ---- */
+  .auth-wrap {
+    display: flex;
+    justify-content: center;
+    padding-top: 3rem;
+  }
+
+  .auth-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 380px;
+    overflow: hidden;
+  }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--border); }
+
+  .tab {
+    flex: 1;
+    padding: 0.9rem;
+    background: none;
+    border: none;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+
+  .tab.active { color: var(--navy); border-bottom-color: var(--teal); }
+
+  .auth-form { padding: 1.5rem; }
+
+  label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 0.3rem;
+    margin-top: 0.9rem;
+  }
+
+  label:first-child { margin-top: 0; }
+
+  input, select {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+  }
+
+  input:focus, select:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
+
+  button {
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    padding: 0.55rem 1rem;
+  }
+
+  button.primary { background: var(--teal); color: #fff; }
+  button.primary:hover { background: var(--teal-dark); }
+  button.ghost { background: transparent; color: var(--navy); border: 1px solid var(--border); }
+  button.ghost:hover { background: var(--bg); }
+  button.small { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
+  button.full { width: 100%; margin-top: 1.1rem; }
+
+  .error { color: var(--red); font-size: 0.85rem; margin: 0.5rem 0 0; min-height: 1em; }
+
+  /* ---- Dashboard ---- */
+  .dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 1rem;
+  }
+
+  .dashboard-header h2 { font-size: 1.1rem; color: var(--navy); margin: 0; }
+
+  .accounts-grid {
+    display: grid;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .account-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.2rem 1.3rem;
+  }
+
+  .account-card-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+  }
+
+  .account-balance {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--navy);
+    padding: 0.1rem 0.2rem;
+    border-radius: 6px;
+    display: inline-block;
+  }
+
+  @keyframes flash-green {
+    0% { background-color: rgba(27, 153, 139, 0.28); }
+    100% { background-color: transparent; }
+  }
+  .flash { animation: flash-green 1.4s ease-out; }
+
+  .account-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+
+  .inline-form { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
+  .inline-form input { flex: 1; }
+
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.2rem 1.3rem;
+  }
+
+  .card h3 { margin: 0 0 0.9rem; font-size: 1rem; color: var(--navy); }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 0.7rem;
+    align-items: end;
+  }
+
+  .field label { margin-top: 0; }
+
+  @media (max-width: 560px) {
+    .form-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 
-<h1>Bank</h1>
-
-<div id="auth" class="card">
-  <div class="row">
-    <input id="username" placeholder="username" autocomplete="username" />
+<div class="topbar">
+  <div class="brand"><span class="icon">🏦</span>Meridian Bank</div>
+  <div id="userBar" class="hidden">
+    <span class="welcome" id="welcomeUser"></span>
+    <button class="ghost small" onclick="logout()">Log out</button>
   </div>
-  <div class="row">
-    <input id="password" type="password" placeholder="password" autocomplete="current-password" />
-  </div>
-  <div class="row">
-    <input id="email" placeholder="email (register only)" autocomplete="email" />
-  </div>
-  <div class="row">
-    <button onclick="login()">Log in</button>
-    <button onclick="register()">Register</button>
-  </div>
-  <p id="authError" class="error"></p>
 </div>
 
-<div id="dashboard" class="hidden">
-  <div class="row">
-    <button onclick="openAccount()">Open new account</button>
-    <button onclick="logout()">Log out</button>
-  </div>
-  <div id="accounts"></div>
+<main>
+  <div id="authScreen" class="auth-wrap">
+    <div class="auth-card">
+      <div class="tabs">
+        <button class="tab active" id="tabLogin" onclick="showTab('login')">Log In</button>
+        <button class="tab" id="tabRegister" onclick="showTab('register')">Register</button>
+      </div>
 
-  <div class="card">
-    <h3>Transfer</h3>
-    <div class="row">
-      <select id="transferFrom"></select>
-      <input id="transferTo" placeholder="to account id" />
-      <input id="transferAmount" placeholder="amount" />
-      <button onclick="transfer()">Send</button>
+      <div id="loginForm" class="auth-form">
+        <label>Username</label>
+        <input id="loginUsername" autocomplete="username" />
+        <label>Password</label>
+        <input id="loginPassword" type="password" autocomplete="current-password" />
+        <button class="primary full" onclick="login()">Log In</button>
+        <p id="authError" class="error"></p>
+      </div>
+
+      <div id="registerForm" class="auth-form hidden">
+        <label>Username</label>
+        <input id="regUsername" autocomplete="username" />
+        <label>Email</label>
+        <input id="regEmail" autocomplete="email" />
+        <label>Password</label>
+        <input id="regPassword" type="password" autocomplete="new-password" />
+        <button class="primary full" onclick="register()">Create Account</button>
+        <p id="regError" class="error"></p>
+      </div>
     </div>
-    <p id="transferError" class="error"></p>
   </div>
-</div>
+
+  <div id="dashboard" class="hidden">
+    <div class="dashboard-header">
+      <h2>Your Accounts</h2>
+      <button class="ghost small" onclick="openAccount()">+ Open new account</button>
+    </div>
+    <div id="accounts" class="accounts-grid"></div>
+
+    <div class="card">
+      <h3>Transfer money</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>From</label>
+          <select id="transferFrom"></select>
+        </div>
+        <div class="field">
+          <label>To account #</label>
+          <input id="transferTo" placeholder="e.g. 7" />
+        </div>
+        <div class="field">
+          <label>Amount</label>
+          <input id="transferAmount" placeholder="0.00" />
+        </div>
+        <button class="primary" onclick="transfer()">Send</button>
+      </div>
+      <p id="transferError" class="error"></p>
+    </div>
+  </div>
+</main>
 
 <script>
 let token = sessionStorage.getItem('token');
@@ -75,23 +298,34 @@ function api(path, method, body) {
     });
 }
 
+function field(id) {
+  return document.getElementById(id).value;
+}
+
+function showTab(which) {
+  document.getElementById('tabLogin').classList.toggle('active', which === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', which === 'register');
+  document.getElementById('loginForm').classList.toggle('hidden', which !== 'login');
+  document.getElementById('registerForm').classList.toggle('hidden', which !== 'register');
+}
+
 async function login() {
-  await authenticate('/api/auth/login', { username: field('username'), password: field('password') });
+  await authenticate('/api/auth/login', { username: field('loginUsername'), password: field('loginPassword') }, 'authError');
 }
 
 async function register() {
-  await authenticate('/api/auth/register', { username: field('username'), email: field('email'), password: field('password') });
+  await authenticate('/api/auth/register', { username: field('regUsername'), email: field('regEmail'), password: field('regPassword') }, 'regError');
 }
 
-async function authenticate(path, body) {
-  document.getElementById('authError').textContent = '';
+async function authenticate(path, body, errorElId) {
+  document.getElementById(errorElId).textContent = '';
   try {
     const data = await api(path, 'POST', body);
     token = data.token;
     sessionStorage.setItem('token', token);
-    await enterDashboard();
+    await enterDashboard(body.username);
   } catch (err) {
-    document.getElementById('authError').textContent = err.message;
+    document.getElementById(errorElId).textContent = err.message;
   }
 }
 
@@ -99,17 +333,16 @@ function logout() {
   if (connection) connection.stop();
   sessionStorage.removeItem('token');
   token = null;
-  document.getElementById('auth').classList.remove('hidden');
+  document.getElementById('authScreen').classList.remove('hidden');
   document.getElementById('dashboard').classList.add('hidden');
+  document.getElementById('userBar').classList.add('hidden');
 }
 
-function field(id) {
-  return document.getElementById(id).value;
-}
-
-async function enterDashboard() {
-  document.getElementById('auth').classList.add('hidden');
+async function enterDashboard(username) {
+  document.getElementById('authScreen').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
+  document.getElementById('userBar').classList.remove('hidden');
+  if (username) document.getElementById('welcomeUser').textContent = `Signed in as ${username}`;
   await refreshAccounts();
   await connectHub();
 }
@@ -127,17 +360,21 @@ function renderAccounts() {
 
   for (const acct of accounts) {
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'account-card';
     card.id = `account-${acct.accountId}`;
     card.innerHTML = `
-      <div class="account-header">
-        <span>#${acct.accountId} &middot; ${acct.accountType}</span>
-        <span class="balance" id="balance-${acct.accountId}">$${acct.balance.toFixed(2)}</span>
+      <div class="account-card-top">
+        <span>${acct.accountType}</span>
+        <span>Account #${acct.accountId}</span>
       </div>
-      <div class="row">
-        <input id="amt-${acct.accountId}" placeholder="amount" />
-        <button onclick="deposit(${acct.accountId})">Deposit</button>
-        <button onclick="withdraw(${acct.accountId})">Withdraw</button>
+      <div class="account-balance" id="balance-${acct.accountId}">$${acct.balance.toFixed(2)}</div>
+      <div class="account-actions">
+        <button class="ghost small" onclick="toggleForm(${acct.accountId}, 'deposit')">Deposit</button>
+        <button class="ghost small" onclick="toggleForm(${acct.accountId}, 'withdraw')">Withdraw</button>
+      </div>
+      <div class="inline-form hidden" id="form-${acct.accountId}">
+        <input id="amt-${acct.accountId}" placeholder="Amount" />
+        <button class="primary small" id="formAction-${acct.accountId}">Confirm</button>
       </div>
       <p id="error-${acct.accountId}" class="error"></p>
     `;
@@ -150,23 +387,33 @@ function renderAccounts() {
   }
 }
 
-async function deposit(accountId) {
-  await doTransaction(accountId, '/api/transactions/deposit', { accountId, amount: amountFor(accountId) });
+function toggleForm(accountId, type) {
+  const formEl = document.getElementById(`form-${accountId}`);
+  const alreadyOpenForSameType = !formEl.classList.contains('hidden') && formEl.dataset.type === type;
+
+  if (alreadyOpenForSameType) {
+    formEl.classList.add('hidden');
+    return;
+  }
+
+  formEl.dataset.type = type;
+  formEl.classList.remove('hidden');
+  const actionBtn = document.getElementById(`formAction-${accountId}`);
+  actionBtn.textContent = type === 'deposit' ? 'Confirm Deposit' : 'Confirm Withdraw';
+  actionBtn.onclick = () => submitForm(accountId);
+  document.getElementById(`amt-${accountId}`).focus();
 }
 
-async function withdraw(accountId) {
-  await doTransaction(accountId, '/api/transactions/withdraw', { accountId, amount: amountFor(accountId) });
-}
-
-function amountFor(accountId) {
-  return parseFloat(field(`amt-${accountId}`));
-}
-
-async function doTransaction(accountId, path, body) {
+async function submitForm(accountId) {
+  const formEl = document.getElementById(`form-${accountId}`);
+  const type = formEl.dataset.type;
+  const amount = parseFloat(field(`amt-${accountId}`));
+  const path = type === 'deposit' ? '/api/transactions/deposit' : '/api/transactions/withdraw';
   const errorEl = document.getElementById(`error-${accountId}`);
   errorEl.textContent = '';
   try {
-    await api(path, 'POST', body);
+    await api(path, 'POST', { accountId, amount });
+    formEl.classList.add('hidden');
   } catch (err) {
     errorEl.textContent = err.message;
   }
@@ -193,16 +440,22 @@ async function openAccount() {
   if (connection) await connection.invoke('SubscribeToAccount', acct.accountId);
 }
 
+function flashBalance(accountId, balance) {
+  const el = document.getElementById(`balance-${accountId}`);
+  if (!el) return;
+  el.textContent = `$${balance.toFixed(2)}`;
+  el.classList.remove('flash');
+  void el.offsetWidth; // restart the animation
+  el.classList.add('flash');
+}
+
 async function connectHub() {
   connection = new signalR.HubConnectionBuilder()
     .withUrl('/hubs/accounts', { accessTokenFactory: () => token })
     .withAutomaticReconnect()
     .build();
 
-  connection.on('BalanceUpdated', ({ accountId, balance }) => {
-    const el = document.getElementById(`balance-${accountId}`);
-    if (el) el.textContent = `$${balance.toFixed(2)}`;
-  });
+  connection.on('BalanceUpdated', ({ accountId, balance }) => flashBalance(accountId, balance));
 
   await connection.start();
   for (const acct of accounts) {

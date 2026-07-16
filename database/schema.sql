@@ -1,5 +1,5 @@
--- Learning Bank - Phase 1 schema
--- Run with: sudo -u postgres psql -f database/schema.sql (after CREATE DATABASE bank)
+-- SQL Bank - Phase 1 schema
+-- Run with: sudo su - postgres -c "psql -f database/schema.sql" (after CREATE DATABASE bank)
 
 CREATE TABLE users (
     user_id SERIAL PRIMARY KEY,

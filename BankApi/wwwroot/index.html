@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Bank</title>
+<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8/dist/browser/signalr.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  .card { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  .row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+  input, select, button { padding: 0.4rem; font-size: 1rem; }
+  input { flex: 1; }
+  button { cursor: pointer; }
+  .error { color: #b00020; }
+  .balance { font-size: 1.6rem; font-weight: bold; }
+  .hidden { display: none; }
+  #dashboard .account-header { display: flex; justify-content: space-between; align-items: baseline; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+
+<h1>Bank</h1>
+
+<div id="auth" class="card">
+  <div class="row">
+    <input id="username" placeholder="username" autocomplete="username" />
+  </div>
+  <div class="row">
+    <input id="password" type="password" placeholder="password" autocomplete="current-password" />
+  </div>
+  <div class="row">
+    <input id="email" placeholder="email (register only)" autocomplete="email" />
+  </div>
+  <div class="row">
+    <button onclick="login()">Log in</button>
+    <button onclick="register()">Register</button>
+  </div>
+  <p id="authError" class="error"></p>
+</div>
+
+<div id="dashboard" class="hidden">
+  <div class="row">
+    <button onclick="openAccount()">Open new account</button>
+    <button onclick="logout()">Log out</button>
+  </div>
+  <div id="accounts"></div>
+
+  <div class="card">
+    <h3>Transfer</h3>
+    <div class="row">
+      <select id="transferFrom"></select>
+      <input id="transferTo" placeholder="to account id" />
+      <input id="transferAmount" placeholder="amount" />
+      <button onclick="transfer()">Send</button>
+    </div>
+    <p id="transferError" class="error"></p>
+  </div>
+</div>
+
+<script>
+let token = sessionStorage.getItem('token');
+let accounts = [];
+let connection = null;
+
+function api(path, method, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined })
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    });
+}
+
+async function login() {
+  await authenticate('/api/auth/login', { username: field('username'), password: field('password') });
+}
+
+async function register() {
+  await authenticate('/api/auth/register', { username: field('username'), email: field('email'), password: field('password') });
+}
+
+async function authenticate(path, body) {
+  document.getElementById('authError').textContent = '';
+  try {
+    const data = await api(path, 'POST', body);
+    token = data.token;
+    sessionStorage.setItem('token', token);
+    await enterDashboard();
+  } catch (err) {
+    document.getElementById('authError').textContent = err.message;
+  }
+}
+
+function logout() {
+  if (connection) connection.stop();
+  sessionStorage.removeItem('token');
+  token = null;
+  document.getElementById('auth').classList.remove('hidden');
+  document.getElementById('dashboard').classList.add('hidden');
+}
+
+function field(id) {
+  return document.getElementById(id).value;
+}
+
+async function enterDashboard() {
+  document.getElementById('auth').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+  await refreshAccounts();
+  await connectHub();
+}
+
+async function refreshAccounts() {
+  accounts = await api('/api/accounts', 'GET');
+  renderAccounts();
+}
+
+function renderAccounts() {
+  const container = document.getElementById('accounts');
+  container.innerHTML = '';
+  const fromSelect = document.getElementById('transferFrom');
+  fromSelect.innerHTML = '';
+
+  for (const acct of accounts) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = `account-${acct.accountId}`;
+    card.innerHTML = `
+      <div class="account-header">
+        <span>#${acct.accountId} &middot; ${acct.accountType}</span>
+        <span class="balance" id="balance-${acct.accountId}">$${acct.balance.toFixed(2)}</span>
+      </div>
+      <div class="row">
+        <input id="amt-${acct.accountId}" placeholder="amount" />
+        <button onclick="deposit(${acct.accountId})">Deposit</button>
+        <button onclick="withdraw(${acct.accountId})">Withdraw</button>
+      </div>
+      <p id="error-${acct.accountId}" class="error"></p>
+    `;
+    container.appendChild(card);
+
+    const option = document.createElement('option');
+    option.value = acct.accountId;
+    option.textContent = `#${acct.accountId} (${acct.accountType})`;
+    fromSelect.appendChild(option);
+  }
+}
+
+async function deposit(accountId) {
+  await doTransaction(accountId, '/api/transactions/deposit', { accountId, amount: amountFor(accountId) });
+}
+
+async function withdraw(accountId) {
+  await doTransaction(accountId, '/api/transactions/withdraw', { accountId, amount: amountFor(accountId) });
+}
+
+function amountFor(accountId) {
+  return parseFloat(field(`amt-${accountId}`));
+}
+
+async function doTransaction(accountId, path, body) {
+  const errorEl = document.getElementById(`error-${accountId}`);
+  errorEl.textContent = '';
+  try {
+    await api(path, 'POST', body);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function transfer() {
+  const errorEl = document.getElementById('transferError');
+  errorEl.textContent = '';
+  try {
+    await api('/api/transactions/transfer', 'POST', {
+      fromAccountId: parseInt(field('transferFrom')),
+      toAccountId: parseInt(field('transferTo')),
+      amount: parseFloat(field('transferAmount')),
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function openAccount() {
+  const acct = await api('/api/accounts', 'POST', { accountType: 'checking' });
+  accounts.push(acct);
+  renderAccounts();
+  if (connection) await connection.invoke('SubscribeToAccount', acct.accountId);
+}
+
+async function connectHub() {
+  connection = new signalR.HubConnectionBuilder()
+    .withUrl('/hubs/accounts', { accessTokenFactory: () => token })
+    .withAutomaticReconnect()
+    .build();
+
+  connection.on('BalanceUpdated', ({ accountId, balance }) => {
+    const el = document.getElementById(`balance-${accountId}`);
+    if (el) el.textContent = `$${balance.toFixed(2)}`;
+  });
+
+  await connection.start();
+  for (const acct of accounts) {
+    await connection.invoke('SubscribeToAccount', acct.accountId);
+  }
+}
+
+if (token) enterDashboard().catch(logout);
+</script>
+
+</body>
+</html>

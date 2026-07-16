@@ -1,1 +1,5 @@
 engine/build/
+
+# .NET build output
+bin/
+obj/

@@ -8,17 +8,9 @@ small browser frontend. Services communicate over REST.
 
 ## Demo
 
-<!--
-Drop screenshots into docs/screenshots/ and they'll render below - e.g.:
-  docs/screenshots/login.png
-  docs/screenshots/dashboard.png
-  docs/screenshots/admin.png
--->
+![Login](docs/screenshots/login.png)
 
-| | |
-|---|---|
-| ![Login](docs/screenshots/login.png) | ![Dashboard](docs/screenshots/dashboard.png) |
-| ![Admin panel](docs/screenshots/admin.png) | |
+![Dashboard](docs/screenshots/dashboard.png)
 
 ## Architecture
 
